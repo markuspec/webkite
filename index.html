@@ -819,7 +819,7 @@
         <span class="video-label" id="localLabel">You</span>
       </div>
       <div class="video-frame" id="remoteFrame">
-        <video id="remoteVideo" autoplay playsinline></video>
+        <video id="remoteVideo" autoplay playsinline muted></video>
         <span class="video-label" id="remoteLabel">Friend</span>
         <div class="video-waiting" id="remoteWaiting">Waiting to connect…</div>
       </div>
@@ -1488,6 +1488,19 @@ let isHost = null; // true = created the party, false = joined it, null = not in
 const localVideoEl = () => document.getElementById('localVideo');
 const remoteVideoEl = () => document.getElementById('remoteVideo');
 
+/* setting srcObject alone doesn't guarantee a non-muted <video> actually
+   starts rendering frames in every browser's autoplay policy — force play()
+   and retry once on the next user click if it gets blocked */
+function attachRemoteStream(remoteStream){
+  const vid = remoteVideoEl();
+  vid.srcObject = remoteStream;
+  const tryPlay = () => vid.play().catch(() => {
+    const retry = () => { vid.play().catch(() => {}); document.removeEventListener('click', retry); };
+    document.addEventListener('click', retry, { once:true });
+  });
+  tryPlay();
+}
+
 /* keeps the host's video on the left for BOTH participants: if you created
    the party your own feed is local so it's already on the left; if you
    joined, your own feed is local but needs to swap to the right so the
@@ -1573,9 +1586,16 @@ function showJoinForm(){
    (used by both the party creator and the person joining) */
 function attachPeerHandlers(){
   peer.on('call', call => {
-    call.answer(localStream);
+    const answerWhenReady = () => {
+      if(localStream){
+        call.answer(localStream);
+      } else {
+        setTimeout(answerWhenReady, 200);
+      }
+    };
+    answerWhenReady();
     call.on('stream', remoteStream => {
-      remoteVideoEl().srcObject = remoteStream;
+      attachRemoteStream(remoteStream);
       document.getElementById('remoteWaiting').style.display = 'none';
       document.getElementById('captureBtn').disabled = false;
       document.getElementById('leavePartyBtn').style.display = 'inline-block';
@@ -1637,7 +1657,7 @@ function connectToFriend(){
     const friendId = PARTY_PREFIX + codeInput;
     mediaCall = peer.call(friendId, localStream);
     mediaCall.on('stream', remoteStream => {
-      remoteVideoEl().srcObject = remoteStream;
+      attachRemoteStream(remoteStream);
       document.getElementById('remoteWaiting').style.display = 'none';
       document.getElementById('captureBtn').disabled = false;
       document.getElementById('leavePartyBtn').style.display = 'inline-block';
