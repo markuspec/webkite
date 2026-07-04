@@ -1562,6 +1562,22 @@ async function initBoothPage(){
 /* ---------- party code create/join flow ---------- */
 const PARTY_PREFIX = 'hbparty-';
 
+/* PeerJS's default free broker only supplies STUN, which helps two devices
+   discover their public address but can't relay traffic when a direct route
+   is blocked (common between two different home/mobile networks). Adding a
+   TURN server as a fallback relay fixes "connected but no video" cases.
+   This is a free public test TURN server (openrelay.metered.ca) — fine for
+   personal/demo use, but swap in a paid TURN provider for anything you need
+   reliable at scale, since free public relays can be slow or rate-limited. */
+const ICE_SERVERS = {
+  iceServers: [
+    { urls: 'stun:stun.l.google.com:19302' },
+    { urls: 'turn:openrelay.metered.ca:80', username: 'openrelayproject', credential: 'openrelayproject' },
+    { urls: 'turn:openrelay.metered.ca:443', username: 'openrelayproject', credential: 'openrelayproject' },
+    { urls: 'turn:openrelay.metered.ca:443?transport=tcp', username: 'openrelayproject', credential: 'openrelayproject' }
+  ]
+};
+
 function generatePartyCode(){
   const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // no ambiguous chars like 0/O, 1/I
   let code = '';
@@ -1604,6 +1620,9 @@ function attachPeerHandlers(){
       closeConnectModal();
     });
     mediaCall = call;
+    call.peerConnection.oniceconnectionstatechange = () => {
+      console.log('[booth] ICE state (answering):', call.peerConnection.iceConnectionState);
+    };
   });
 
   peer.on('connection', conn => {
@@ -1624,7 +1643,7 @@ function startCreateParty(){
   document.getElementById('partyCodeDisplay').textContent = code;
   setTagStatus('Setting up your party…');
 
-  peer = new Peer(PARTY_PREFIX + code);
+  peer = new Peer(PARTY_PREFIX + code, { config: ICE_SERVERS });
 
   peer.on('open', () => {
     myTag = code;
@@ -1656,6 +1675,9 @@ function connectToFriend(){
   function doJoin(){
     const friendId = PARTY_PREFIX + codeInput;
     mediaCall = peer.call(friendId, localStream);
+    mediaCall.peerConnection.oniceconnectionstatechange = () => {
+      console.log('[booth] ICE state (calling):', mediaCall.peerConnection.iceConnectionState);
+    };
     mediaCall.on('stream', remoteStream => {
       attachRemoteStream(remoteStream);
       document.getElementById('remoteWaiting').style.display = 'none';
@@ -1676,7 +1698,7 @@ function connectToFriend(){
     doJoin();
   } else {
     if(peer){ peer.destroy(); }
-    peer = new Peer();
+    peer = new Peer(undefined, { config: ICE_SERVERS });
     peer.on('open', () => { myTag = peer.id; doJoin(); });
     peer.on('error', err => setConnectStatus('Connection hiccup: ' + err.type + '. Try again.'));
     attachPeerHandlers();
@@ -1859,4 +1881,4 @@ function resetBooth(){
 </script>
 
 </body>
-</html> 
+</html>
