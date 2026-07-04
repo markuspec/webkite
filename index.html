@@ -1635,6 +1635,50 @@ function showJoinForm(){
   document.getElementById('partyBackBtn').style.display = 'inline-block';
 }
 
+/* polls the real WebRTC stats instead of relying on event properties that
+   may not be populated the instant the call object exists — gives ground
+   truth on whether video bytes are actually arriving over the network */
+function monitorCallStats(call, label){
+  let lastBytes = -1;
+  let attempts = 0;
+  let intervalId = null;
+
+  function attach(){
+    const pc = call.peerConnection;
+    if(!pc){
+      attempts++;
+      if(attempts > 30){ logDebug(label + ': peerConnection never became available after 6s'); return; }
+      setTimeout(attach, 200);
+      return;
+    }
+    logDebug(label + ': peerConnection ready, ICE state=' + pc.iceConnectionState);
+    pc.addEventListener('iceconnectionstatechange', () => {
+      logDebug(label + ': ICE state -> ' + pc.iceConnectionState);
+    });
+    pc.addEventListener('connectionstatechange', () => {
+      logDebug(label + ': connection state -> ' + pc.connectionState);
+    });
+
+    intervalId = setInterval(async () => {
+      try{
+        const stats = await pc.getStats();
+        stats.forEach(report => {
+          if(report.type === 'inbound-rtp' && report.kind === 'video'){
+            const bytes = report.bytesReceived || 0;
+            const frames = report.framesDecoded || 0;
+            const delta = lastBytes >= 0 ? bytes - lastBytes : bytes;
+            logDebug(label + `: inbound video — bytesReceived=${bytes} (+${delta} since last check), framesDecoded=${frames}`);
+            lastBytes = bytes;
+          }
+        });
+      }catch(e){ /* ignore transient stats errors */ }
+    }, 3000);
+
+    call.on('close', () => { if(intervalId) clearInterval(intervalId); });
+  }
+  attach();
+}
+
 /* wires up the shared handlers for whichever peer connection is active
    (used by both the party creator and the person joining) */
 function attachPeerHandlers(){
@@ -1665,9 +1709,7 @@ function attachPeerHandlers(){
     call.on('error', err => logDebug('Call error (answering side): ' + err));
     call.on('close', () => logDebug('Call closed (answering side)'));
     mediaCall = call;
-    call.peerConnection.oniceconnectionstatechange = () => {
-      logDebug('ICE state (answering): ' + call.peerConnection.iceConnectionState);
-    };
+    monitorCallStats(call, 'Answering');
   });
 
   peer.on('connection', conn => {
@@ -1724,9 +1766,7 @@ function connectToFriend(){
     const friendId = PARTY_PREFIX + codeInput;
     logDebug('Calling ' + friendId + ' with local stream (tracks: ' + localStream.getTracks().length + ')');
     mediaCall = peer.call(friendId, localStream);
-    mediaCall.peerConnection.oniceconnectionstatechange = () => {
-      logDebug('ICE state (calling): ' + mediaCall.peerConnection.iceConnectionState);
-    };
+    monitorCallStats(mediaCall, 'Calling');
     mediaCall.on('stream', remoteStream => {
       const vtracks = remoteStream.getVideoTracks();
       logDebug('Remote stream received, video tracks: ' + vtracks.length +
