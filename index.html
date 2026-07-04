@@ -705,6 +705,18 @@
     cursor:default;
   }
   .capture-btn:not(:disabled):hover{ background:#c65c84; }
+  .leave-btn{
+    background:rgba(200,60,60,0.25);
+    color:#ffdede;
+    border:1px solid rgba(255,120,120,0.5);
+    padding:10px 18px;
+    border-radius:24px;
+    font-size:0.88rem;
+    cursor:pointer;
+    margin-left:10px;
+    transition:background 0.2s;
+  }
+  .leave-btn:hover{ background:rgba(200,60,60,0.4); }
   .reset-btn{
     background:rgba(255,255,255,0.15);
     color:#fdeaf6;
@@ -802,13 +814,13 @@
     </div>
 
     <div class="video-stage">
-      <div class="video-frame">
+      <div class="video-frame" id="localFrame">
         <video id="localVideo" autoplay playsinline muted></video>
-        <span class="video-label">You</span>
+        <span class="video-label" id="localLabel">You</span>
       </div>
-      <div class="video-frame">
+      <div class="video-frame" id="remoteFrame">
         <video id="remoteVideo" autoplay playsinline></video>
-        <span class="video-label">Friend</span>
+        <span class="video-label" id="remoteLabel">Friend</span>
         <div class="video-waiting" id="remoteWaiting">Waiting to connect…</div>
       </div>
       <div class="countdown-overlay" id="countdownOverlay"></div>
@@ -816,6 +828,7 @@
 
     <div class="booth-controls">
       <button id="captureBtn" class="capture-btn" onclick="beginBoothCapture(true)" disabled>Take Photo Strip 📷</button>
+      <button id="leavePartyBtn" class="leave-btn" onclick="leaveParty()" style="display:none;">Leave Party</button>
       <button id="resetBoothBtn" class="reset-btn" onclick="resetBooth()" style="display:none;">Take Another Strip</button>
     </div>
 
@@ -1470,9 +1483,36 @@ let dataConn = null;
 let boothInitStarted = false;
 let boothShots = [];
 let boothBusy = false;
+let isHost = null; // true = created the party, false = joined it, null = not in a party
 
 const localVideoEl = () => document.getElementById('localVideo');
 const remoteVideoEl = () => document.getElementById('remoteVideo');
+
+/* keeps the host's video on the left for BOTH participants: if you created
+   the party your own feed is local so it's already on the left; if you
+   joined, your own feed is local but needs to swap to the right so the
+   host (remote, for you) shows up on the left instead */
+function updateVideoOrder(hostFlag){
+  const localFrame = document.getElementById('localFrame');
+  const remoteFrame = document.getElementById('remoteFrame');
+  if(hostFlag){
+    localFrame.style.order = '1';
+    remoteFrame.style.order = '2';
+    document.getElementById('localLabel').textContent = 'You (Host)';
+    document.getElementById('remoteLabel').textContent = 'Friend';
+  } else {
+    localFrame.style.order = '2';
+    remoteFrame.style.order = '1';
+    document.getElementById('localLabel').textContent = 'You';
+    document.getElementById('remoteLabel').textContent = 'Friend (Host)';
+  }
+}
+function resetVideoOrder(){
+  document.getElementById('localFrame').style.order = '';
+  document.getElementById('remoteFrame').style.order = '';
+  document.getElementById('localLabel').textContent = 'You';
+  document.getElementById('remoteLabel').textContent = 'Friend';
+}
 
 function setTagStatus(msg){
   document.getElementById('myTagStatus').textContent = msg;
@@ -1538,6 +1578,7 @@ function attachPeerHandlers(){
       remoteVideoEl().srcObject = remoteStream;
       document.getElementById('remoteWaiting').style.display = 'none';
       document.getElementById('captureBtn').disabled = false;
+      document.getElementById('leavePartyBtn').style.display = 'inline-block';
       setConnectStatus('Connected! Ready to take photos together.');
       document.getElementById('connectMainBtn').textContent = '✅ Connected';
       closeConnectModal();
@@ -1557,6 +1598,8 @@ function startCreateParty(){
   document.getElementById('partyBackBtn').style.display = 'inline-block';
 
   if(peer){ peer.destroy(); }
+  isHost = true;
+  updateVideoOrder(true);
   const code = generatePartyCode();
   document.getElementById('partyCodeDisplay').textContent = code;
   setTagStatus('Setting up your party…');
@@ -1587,6 +1630,8 @@ function connectToFriend(){
   if(!localStream){ setConnectStatus('Waiting on camera access — allow it and try again.'); return; }
 
   setConnectStatus('Connecting…');
+  isHost = false;
+  updateVideoOrder(false);
 
   function doJoin(){
     const friendId = PARTY_PREFIX + codeInput;
@@ -1595,6 +1640,7 @@ function connectToFriend(){
       remoteVideoEl().srcObject = remoteStream;
       document.getElementById('remoteWaiting').style.display = 'none';
       document.getElementById('captureBtn').disabled = false;
+      document.getElementById('leavePartyBtn').style.display = 'inline-block';
       setConnectStatus('Connected! Ready to take photos together.');
       document.getElementById('connectMainBtn').textContent = '✅ Connected';
       closeConnectModal();
@@ -1617,10 +1663,43 @@ function connectToFriend(){
   }
 }
 
+/* ---------- leaving a party (either side can leave at will) ---------- */
+function performLeave(shouldNotify, waitingMessage){
+  if(shouldNotify && dataConn && dataConn.open){
+    try{ dataConn.send({type:'leaveParty'}); }catch(e){}
+  }
+  if(mediaCall){ try{ mediaCall.close(); }catch(e){} mediaCall = null; }
+  if(dataConn){ try{ dataConn.close(); }catch(e){} dataConn = null; }
+  if(peer){ try{ peer.destroy(); }catch(e){} peer = null; }
+  myTag = null;
+  isHost = null;
+  boothBusy = false;
+  boothShots = [];
+
+  remoteVideoEl().srcObject = null;
+  const waitingEl = document.getElementById('remoteWaiting');
+  waitingEl.textContent = waitingMessage;
+  waitingEl.style.display = 'flex';
+
+  document.getElementById('captureBtn').disabled = true;
+  document.getElementById('leavePartyBtn').style.display = 'none';
+  document.getElementById('connectMainBtn').textContent = '🎉 Start a Party';
+  document.getElementById('shotsRow').innerHTML = '';
+  document.getElementById('stripResult').style.display = 'none';
+  document.getElementById('resetBoothBtn').style.display = 'none';
+  resetVideoOrder();
+}
+
+function leaveParty(){
+  performLeave(true, 'Waiting to connect…');
+}
 
 function handleBoothData(data){
-  if(data && data.type === 'startBooth' && !boothBusy){
+  if(!data) return;
+  if(data.type === 'startBooth' && !boothBusy){
     beginBoothCapture(false);
+  } else if(data.type === 'leaveParty'){
+    performLeave(false, 'Your friend left the party.');
   }
 }
 
@@ -1675,16 +1754,28 @@ function captureCombinedFrame(){
   ctx.fillRect(0,0,w,h);
 
   const lv = localVideoEl(), rv = remoteVideoEl();
-  if(lv && lv.videoWidth){
+  /* host always ends up on the left of the photo, whether the host's feed is
+     local (you created the party) or remote (your friend created it) */
+  const leftVideo = isHost === false ? rv : lv;
+  const rightVideo = isHost === false ? lv : rv;
+  const leftIsLocal = isHost !== false;  // mirror only the local/self camera
+
+  function drawHalf(video, xOffset, mirror){
+    if(!video || !video.videoWidth) return;
     ctx.save();
-    ctx.translate(half, 0);
-    ctx.scale(-1, 1);
-    ctx.drawImage(lv, 0, 0, half, h);
+    if(mirror){
+      ctx.translate(xOffset + half, 0);
+      ctx.scale(-1, 1);
+      ctx.drawImage(video, 0, 0, half, h);
+    } else {
+      ctx.drawImage(video, xOffset, 0, half, h);
+    }
     ctx.restore();
   }
-  if(rv && rv.videoWidth){
-    ctx.drawImage(rv, half, 0, half, h);
-  }
+
+  drawHalf(leftVideo, 0, leftIsLocal);
+  drawHalf(rightVideo, half, !leftIsLocal);
+
   ctx.strokeStyle = 'rgba(255,255,255,0.8)';
   ctx.lineWidth = 3;
   ctx.beginPath();
@@ -1748,4 +1839,4 @@ function resetBooth(){
 </script>
 
 </body>
-</html> 
+</html>
