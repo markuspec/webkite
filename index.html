@@ -493,6 +493,15 @@
     margin-top:6px;
     font-size:0.92rem;
   }
+  .booth-debug{
+    color:#c9a8cc;
+    font-size:0.7rem;
+    font-family:monospace;
+    max-width:600px;
+    margin:10px auto 0;
+    word-break:break-word;
+    opacity:0.85;
+  }
   .connect-main-btn{
     margin-top:16px;
     background:#e0729a;
@@ -811,6 +820,7 @@
       <p>Connect with a friend and take a photo strip together</p>
       <button class="connect-main-btn" id="connectMainBtn" onclick="openConnectModal()">🎉 Start a Party</button>
       <p class="tag-hint" id="topConnectStatus"></p>
+      <p class="booth-debug" id="boothDebug"></p>
     </div>
 
     <div class="video-stage">
@@ -1536,6 +1546,18 @@ function setConnectStatus(msg){
   document.getElementById('topConnectStatus').textContent = msg;
 }
 
+/* writes to both the browser console AND a visible on-page line, so
+   nothing gets missed regardless of whether dev tools happened to be
+   open at the right moment */
+function logDebug(msg){
+  console.log('[booth]', msg);
+  const el = document.getElementById('boothDebug');
+  if(el){
+    const time = new Date().toLocaleTimeString();
+    el.textContent = `[${time}] ${msg}` + (el.textContent ? '  ←  ' + el.textContent.slice(0,300) : '');
+  }
+}
+
 function openConnectModal(){
   if(!peer){ resetPartyChoice(); }
   document.getElementById('connectModal').classList.add('show');
@@ -1554,7 +1576,9 @@ async function initBoothPage(){
   try{
     localStream = await navigator.mediaDevices.getUserMedia({ video:true, audio:false });
     localVideoEl().srcObject = localStream;
+    logDebug('Camera ready, tracks: ' + localStream.getTracks().length);
   }catch(err){
+    logDebug('Camera access failed: ' + err.message);
     setTagStatus('Camera access is needed for the photobooth — please allow it and reload.');
   }
 }
@@ -1602,15 +1626,21 @@ function showJoinForm(){
    (used by both the party creator and the person joining) */
 function attachPeerHandlers(){
   peer.on('call', call => {
+    logDebug('Incoming call received from ' + call.peer);
     const answerWhenReady = () => {
       if(localStream){
+        logDebug('Answering call with local stream (tracks: ' + localStream.getTracks().length + ')');
         call.answer(localStream);
       } else {
+        logDebug('Waiting for local camera before answering…');
         setTimeout(answerWhenReady, 200);
       }
     };
     answerWhenReady();
     call.on('stream', remoteStream => {
+      const vtracks = remoteStream.getVideoTracks();
+      logDebug('Remote stream received, video tracks: ' + vtracks.length +
+        (vtracks[0] ? ` (readyState=${vtracks[0].readyState}, muted=${vtracks[0].muted}, enabled=${vtracks[0].enabled})` : ''));
       attachRemoteStream(remoteStream);
       document.getElementById('remoteWaiting').style.display = 'none';
       document.getElementById('captureBtn').disabled = false;
@@ -1619,13 +1649,16 @@ function attachPeerHandlers(){
       document.getElementById('connectMainBtn').textContent = '✅ Connected';
       closeConnectModal();
     });
+    call.on('error', err => logDebug('Call error (answering side): ' + err));
+    call.on('close', () => logDebug('Call closed (answering side)'));
     mediaCall = call;
     call.peerConnection.oniceconnectionstatechange = () => {
-      console.log('[booth] ICE state (answering):', call.peerConnection.iceConnectionState);
+      logDebug('ICE state (answering): ' + call.peerConnection.iceConnectionState);
     };
   });
 
   peer.on('connection', conn => {
+    logDebug('Data connection established with ' + conn.peer);
     dataConn = conn;
     conn.on('data', handleBoothData);
   });
@@ -1645,13 +1678,15 @@ function startCreateParty(){
 
   peer = new Peer(PARTY_PREFIX + code, { config: ICE_SERVERS });
 
-  peer.on('open', () => {
+  peer.on('open', id => {
     myTag = code;
+    logDebug('Host peer open, id: ' + id);
     setTagStatus("Waiting for your friend to join with this code…");
     document.getElementById('connectMainBtn').textContent = `🎉 Party code: ${code}`;
   });
 
   peer.on('error', err => {
+    logDebug('Host peer error: ' + err.type + ' — ' + err.message);
     if(err.type === 'unavailable-id'){
       setTagStatus('That code is taken right now, generating a new one…');
       startCreateParty();
@@ -1674,11 +1709,15 @@ function connectToFriend(){
 
   function doJoin(){
     const friendId = PARTY_PREFIX + codeInput;
+    logDebug('Calling ' + friendId + ' with local stream (tracks: ' + localStream.getTracks().length + ')');
     mediaCall = peer.call(friendId, localStream);
     mediaCall.peerConnection.oniceconnectionstatechange = () => {
-      console.log('[booth] ICE state (calling):', mediaCall.peerConnection.iceConnectionState);
+      logDebug('ICE state (calling): ' + mediaCall.peerConnection.iceConnectionState);
     };
     mediaCall.on('stream', remoteStream => {
+      const vtracks = remoteStream.getVideoTracks();
+      logDebug('Remote stream received, video tracks: ' + vtracks.length +
+        (vtracks[0] ? ` (readyState=${vtracks[0].readyState}, muted=${vtracks[0].muted}, enabled=${vtracks[0].enabled})` : ''));
       attachRemoteStream(remoteStream);
       document.getElementById('remoteWaiting').style.display = 'none';
       document.getElementById('captureBtn').disabled = false;
@@ -1687,11 +1726,16 @@ function connectToFriend(){
       document.getElementById('connectMainBtn').textContent = '✅ Connected';
       closeConnectModal();
     });
-    mediaCall.on('error', () => setConnectStatus("Couldn't reach that code — check it and try again."));
+    mediaCall.on('error', err => {
+      logDebug('Call error (calling side): ' + err);
+      setConnectStatus("Couldn't reach that code — check it and try again.");
+    });
+    mediaCall.on('close', () => logDebug('Call closed (calling side)'));
 
     dataConn = peer.connect(friendId);
+    dataConn.on('open', () => logDebug('Data connection open with ' + friendId));
     dataConn.on('data', handleBoothData);
-    dataConn.on('error', () => {});
+    dataConn.on('error', err => logDebug('Data connection error: ' + err));
   }
 
   if(peer && myTag){
@@ -1699,8 +1743,11 @@ function connectToFriend(){
   } else {
     if(peer){ peer.destroy(); }
     peer = new Peer(undefined, { config: ICE_SERVERS });
-    peer.on('open', () => { myTag = peer.id; doJoin(); });
-    peer.on('error', err => setConnectStatus('Connection hiccup: ' + err.type + '. Try again.'));
+    peer.on('open', id => { myTag = id; logDebug('Joiner peer open, id: ' + id); doJoin(); });
+    peer.on('error', err => {
+      logDebug('Joiner peer error: ' + err.type + ' — ' + err.message);
+      setConnectStatus('Connection hiccup: ' + err.type + '. Try again.');
+    });
     attachPeerHandlers();
   }
 }
