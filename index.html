@@ -495,12 +495,22 @@
   }
   .booth-debug{
     color:#c9a8cc;
-    font-size:0.7rem;
+    font-size:0.68rem;
     font-family:monospace;
-    max-width:600px;
+    max-width:640px;
+    max-height:150px;
+    overflow-y:auto;
+    text-align:left;
     margin:10px auto 0;
+    padding:8px 10px;
+    background:rgba(0,0,0,0.2);
+    border-radius:8px;
     word-break:break-word;
-    opacity:0.85;
+    opacity:0.9;
+  }
+  .booth-debug div{
+    padding:1px 0;
+    border-bottom:1px solid rgba(255,255,255,0.06);
   }
   .connect-main-btn{
     margin-top:16px;
@@ -820,7 +830,7 @@
       <p>Connect with a friend and take a photo strip together</p>
       <button class="connect-main-btn" id="connectMainBtn" onclick="openConnectModal()">🎉 Start a Party</button>
       <p class="tag-hint" id="topConnectStatus"></p>
-      <p class="booth-debug" id="boothDebug"></p>
+      <div class="booth-debug" id="boothDebug"></div>
     </div>
 
     <div class="video-stage">
@@ -1546,15 +1556,18 @@ function setConnectStatus(msg){
   document.getElementById('topConnectStatus').textContent = msg;
 }
 
-/* writes to both the browser console AND a visible on-page line, so
-   nothing gets missed regardless of whether dev tools happened to be
-   open at the right moment */
+/* writes to both the browser console AND a visible on-page scrolling log,
+   so nothing gets missed regardless of whether dev tools happened to be
+   open at the right moment, and nothing gets truncated out of view */
 function logDebug(msg){
   console.log('[booth]', msg);
   const el = document.getElementById('boothDebug');
   if(el){
     const time = new Date().toLocaleTimeString();
-    el.textContent = `[${time}] ${msg}` + (el.textContent ? '  ←  ' + el.textContent.slice(0,300) : '');
+    const line = document.createElement('div');
+    line.textContent = `[${time}] ${msg}`;
+    el.appendChild(line);
+    el.scrollTop = el.scrollHeight;
   }
 }
 
